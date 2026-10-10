@@ -62,3 +62,7 @@ python solver.py example/example01.jpg --mark
 
 若截图识别异常（行列数不一致、颜色聚类数不等于 n），程序会给出警告，
 此时请提供更完整、无遮挡的棋盘截图。
+
+## 许可证
+
+本项目采用 [MIT License](LICENSE)。
