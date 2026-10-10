@@ -20,6 +20,12 @@ python solver.py 截图.jpg --json          # JSON 输出(方便程序调用)
 solve.bat 截图.jpg                        # Windows 下一键运行
 ```
 
+`example/` 目录下提供 12 张示例截图，可直接试用，例如：
+
+```
+python solver.py example/example01.jpg --mark
+```
+
 坐标系与游戏画面一致：`x` 为列（自左向右 1…n），`y` 为行（自下而上 1…n），左下角为 `(1,1)`。
 
 `--mark` 不带参数时，会在截图所在目录生成同名 `.png`（例如 `1.jpg` → `1.png`）；
