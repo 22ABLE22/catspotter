@@ -1,6 +1,13 @@
 # n-times-n 找猫求解器
 
-自动从游戏截图中识别 n×n 彩色棋盘，并按游戏规则求出全部 n 只小猫的坐标。
+从游戏截图中自动识别 n×n 彩色棋盘，并按游戏规则求出全部 n 只小猫的坐标。
+
+提供两个版本，算法完全一致：
+
+- **网页版（纯前端）**：打开网页 → 选图/拖图/粘贴 → 直接出答案。图片只在浏览器本地处理，不会上传。
+- **命令行版（Python）**：`py-version/`，适合批量处理与二次开发。
+
+> 在线体验：<https://22able22.github.io/n-times-n-cat-solver/>
 
 ## 规则
 
@@ -9,10 +16,20 @@
 3. 任意两只猫不能相邻：**上下左右和对角线都不行（八邻）**
    —— 中间的格子周围 8 格都不能有猫，贴边的格子 5 格，贴角的格子 3 格
 
-## 依赖与用法
+## 网页版
+
+访问 <https://22able22.github.io/n-times-n-cat-solver/>（或在本地直接用浏览器打开 `docs/index.html`）。
+
+- 点击选择、拖入、或 `Ctrl/⌘ + V` 粘贴截图
+- 页面会圈出答案，并列出每只猫的坐标，可一键复制
+- 完全离线运行，无后端、无依赖 CDN
+
+## 命令行版（Python）
 
 ```
+cd py-version
 pip install numpy pillow
+
 python solver.py 截图.jpg                 # 打印小猫坐标
 python solver.py 截图.jpg --mark          # 另存答案标注图, 自动命名为同名 .png
 python solver.py 截图.jpg --mark out.png  # 另存到指定路径
@@ -20,10 +37,10 @@ python solver.py 截图.jpg --json          # JSON 输出(方便程序调用)
 solve.bat 截图.jpg                        # Windows 下一键运行
 ```
 
-`example/` 目录下提供 12 张示例截图，可直接试用，例如：
+`example/` 目录下提供 12 张示例截图，可直接试用：
 
 ```
-python solver.py example/example01.jpg --mark
+python py-version/solver.py example/example01.jpg --mark
 ```
 
 坐标系与游戏画面一致：`x` 为列（自左向右 1…n），`y` 为行（自下而上 1…n），左下角为 `(1,1)`。
@@ -60,8 +77,24 @@ python solver.py example/example01.jpg --mark
 
 两处修正后，所有测试关卡（8×8 到 16×16）均得到唯一解。
 
-若截图识别异常（行列数不一致、颜色聚类数不等于 n），程序会给出警告，
-此时请提供更完整、无遮挡的棋盘截图。
+## 目录结构
+
+```
+├── docs/                 # 网页版（GitHub Pages 站点根目录）
+│   ├── index.html
+│   ├── app.js            # 页面交互：读图、画圈、列坐标
+│   ├── cat-solver.js     # 核心算法（纯 JS，无 DOM 依赖，可直接被 Node 引用）
+│   └── style.css
+├── py-version/           # 命令行版
+│   ├── solver.py
+│   └── solve.bat
+├── example/              # 12 张示例截图
+├── LICENSE
+└── README.md
+```
+
+网页版的 `cat-solver.js` 与 `py-version/solver.py` 是同一套算法：
+已在 12 张示例截图上逐例比对，两者的 n、唯一性与全部坐标完全一致。
 
 ## 许可证
 
