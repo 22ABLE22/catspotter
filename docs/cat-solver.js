@@ -125,28 +125,83 @@ function bands(counts, thresh) {
   return runs(counts.map(c => c > thresh)).filter(b => b[1] - b[0] >= MIN_BAND);
 }
 
-/** 找出棋盘的行列条带；imageData 形如 {data: Uint8ClampedArray, width, height} */
-export function detectGrid(imageData) {
+function maxOf(arr) {
+  let m = 0;
+  for (let i = 0; i < arr.length; i++) if (arr[i] > m) m = arr[i];
+  return m;
+}
+
+/** 最长的一段连续超阈值区间，返回 [start, end] */
+function longestRun(arr, thresh) {
+  let best = null, start = null;
+  for (let i = 0; i <= arr.length; i++) {
+    const on = i < arr.length && arr[i] > thresh;
+    if (on && start === null) start = i;
+    else if (!on && start !== null) {
+      if (!best || i - start > best[1] - best[0] + 1) best = [start, i - 1];
+      start = null;
+    }
+  }
+  return best;
+}
+
+/** 预计算：彩色掩码 + 行/列投影（两种定位策略共用） */
+function colorStats(imageData) {
   const { data, width, height } = imageData;
   const colored = new Uint8Array(width * height);
   const rowCnt = new Float64Array(height);
+  const colCnt = new Float64Array(width);
+  const rowSat = new Float64Array(height);
+  const colSat = new Float64Array(width);
   for (let y = 0; y < height; y++) {
-    let c = 0;
+    let c = 0, s = 0;
     for (let x = 0; x < width; x++) {
       const p = (y * width + x) * 4;
       const r = data[p], g = data[p + 1], b = data[p + 2];
       const sat = Math.max(r, g, b) - Math.min(r, g, b);
-      if (sat > SAT_MIN) { colored[y * width + x] = 1; c++; }
+      s += sat;
+      colSat[x] += sat;
+      if (sat > SAT_MIN) { colored[y * width + x] = 1; c++; colCnt[x]++; }
     }
     rowCnt[y] = c;
+    rowSat[y] = s;
   }
+  for (let y = 0; y < height; y++) rowSat[y] /= width;
+  for (let x = 0; x < width; x++) colSat[x] /= height;
+  return { colored, rowCnt, colCnt, rowSat, colSat };
+}
 
-  const maxOf = arr => { let m = 0; for (let i = 0; i < arr.length; i++) if (arr[i] > m) m = arr[i]; return m; };
+/**
+ * 棋盘外框：在"最长的一段超阈值区间"基础上，把缝隙很小（≤ 段长 10%）的相邻区间也并进来。
+ * 光取最长连续段会被个别偏低的像素行截断（例如某行刚好是浅色格子）；
+ * 而直接取 min/max 又会把界面上的元素并进来。
+ */
+function extentAroundLongestRun(arr, thresh) {
+  const idx = [];
+  for (let i = 0; i < arr.length; i++) if (arr[i] > thresh) idx.push(i);
+  if (!idx.length) return null;
+  const longest = longestRun(arr, thresh) || [idx[0], idx[idx.length - 1]];
+  const maxGap = Math.max(3, Math.round((longest[1] - longest[0] + 1) * 0.1));
+  let a = longest[0], b = longest[1];
+  for (const v of idx) {
+    if (v < a && a - v <= maxGap) a = v;
+    else if (v > b && v - b <= maxGap) b = v;
+  }
+  return [a, b];
+}
+
+/**
+ * 策略 A（常规）：饱和度间隙法。
+ * 正面完整截图里格子之间有可见缝隙（低饱和），投影曲线会周期性地掉下来，
+ * 于是能精确切出每一格。缺点：截图被缩小/压缩后缝隙被糊平就会失效。
+ */
+function detectByGaps(imageData, stats) {
+  const { width } = imageData;
+  const { colored, rowCnt } = stats;
   const maxRow = maxOf(rowCnt);
-  let best = null;
   for (const frac of [0.45, 0.35, 0.55, 0.30, 0.60]) {
     const rows = pickSeries(bands(rowCnt, maxRow * frac));
-    if (!rows.length) continue;
+    if (rows.length < 3) continue;
     const y0 = rows[0][0], y1 = rows[rows.length - 1][1];
     const colCnt = new Float64Array(width);
     for (let x = 0; x < width; x++) {
@@ -154,13 +209,125 @@ export function detectGrid(imageData) {
       for (let y = y0; y <= y1; y++) c += colored[y * width + x];
       colCnt[x] = c;
     }
-    const maxCol = maxOf(colCnt);
-    const cols = pickSeries(bands(colCnt, maxCol * frac));
-    if (!cols.length) continue;
-    if (rows.length === cols.length) { best = { rows, cols }; break; }
+    const cols = pickSeries(bands(colCnt, maxOf(colCnt) * frac));
+    if (cols.length !== rows.length) continue;
+    return { rows, cols, method: '格线' };
   }
-  if (!best) throw new Error('未能识别出棋盘格子，请确认截图包含完整的 n×n 网格');
-  return best;
+  return null;
+}
+
+/**
+ * 用自相关估计格子边长：格子之间的缝更亮/更淡，所以亮度、饱和度曲线都是周期信号。
+ * 取"自相关接近最强"里**最小**的周期，即基频 —— 否则容易锁到 2 倍周期（把 n 估成一半）。
+ */
+function estimatePitch(signal) {
+  const n = signal.length;
+  let mean = 0;
+  for (const v of signal) mean += v;
+  mean /= n;
+  const s = signal.map(v => v - mean);
+  const lo = Math.max(3, Math.floor(n / 30));       // 最多 30 格
+  const hi = Math.max(lo + 1, Math.floor(n / 3));   // 至少 3 格
+  const acs = [];
+  for (let lag = lo; lag <= hi; lag++) {
+    let dot = 0, e0 = 0, e1 = 0;
+    for (let i = 0; i + lag < n; i++) {
+      dot += s[i] * s[i + lag];
+      e0 += s[i] * s[i];
+      e1 += s[i + lag] * s[i + lag];
+    }
+    acs.push([lag, dot / Math.sqrt(e0 * e1 + 1e-9)]);
+  }
+  if (!acs.length) return null;
+  let maxAc = -Infinity;
+  for (const [, ac] of acs) if (ac > maxAc) maxAc = ac;
+  let pick = null;
+  for (const [lag, ac] of acs) {
+    if (ac >= 0.85 * maxAc && (!pick || lag < pick[0])) pick = [lag, ac];
+  }
+  if (!pick) return null;
+  return { lag: pick[0], ac: pick[1], nEst: n / pick[0] };
+}
+
+/** 把 [start, start+size) 均匀切成 n 段 */
+function evenBands(start, size, n) {
+  const out = [];
+  for (let i = 0; i < n; i++) {
+    const a0 = start + Math.round(i * size / n);
+    const a1 = start + Math.round((i + 1) * size / n) - 1;
+    out.push([a0, Math.max(a0, a1)]);
+  }
+  return out;
+}
+
+/**
+ * 策略 B（兜底）：周期法。
+ * 先用彩色像素定位棋盘外框，再用亮度/饱和度曲线的自相关估计格子边长，
+ * 最后按 n 均匀切分。适合被缩小/压缩、缝隙已糊平的截图。
+ * 两个轴、两种信号各给一个估算，按自相关强度排序作为候选。
+ */
+function detectByPitch(imageData, stats) {
+  const { data, width } = imageData;
+  const { rowCnt, colCnt, rowSat, colSat } = stats;
+  const yRun = extentAroundLongestRun(rowCnt, maxOf(rowCnt) * 0.5);
+  if (!yRun) return [];
+  const xRun = extentAroundLongestRun(colCnt, maxOf(colCnt) * 0.5);
+  if (!xRun) return [];
+  const [y0, y1] = yRun, [x0, x1] = xRun;
+  const h = y1 - y0 + 1, w = x1 - x0 + 1;
+  if (h < 100 || w < 100) return [];          // 太小不可能是棋盘
+
+  const rowLum = [], colLum = [];
+  for (let y = y0; y <= y1; y++) {
+    let s = 0;
+    for (let x = x0; x <= x1; x++) {
+      const p = (y * width + x) * 4;
+      s += (data[p] + data[p + 1] + data[p + 2]) / 3;
+    }
+    rowLum.push(s / w);
+  }
+  for (let x = x0; x <= x1; x++) {
+    let s = 0;
+    for (let y = y0; y <= y1; y++) {
+      const p = (y * width + x) * 4;
+      s += (data[p] + data[p + 1] + data[p + 2]) / 3;
+    }
+    colLum.push(s / h);
+  }
+  const rowSatSeg = Array.from(rowSat.slice(y0, y1 + 1));
+  const colSatSeg = Array.from(colSat.slice(x0, x1 + 1));
+
+  // 收集候选 n（去重保留最高自相关）
+  const byN = new Map();
+  const add = (n, ac, axis) => {
+    const v = Math.round(n);
+    if (v < 3 || v > 30) return;
+    if (!byN.has(v) || byN.get(v).ac < ac) byN.set(v, { n: v, ac, axis });
+  };
+  for (const [sig, size, axis] of [[rowSatSeg, h, '行'], [colSatSeg, w, '列'],
+                                   [rowLum, h, '行'], [colLum, w, '列']]) {
+    const p = estimatePitch(sig);
+    if (!p) continue;
+    add(size / p.lag, p.ac, axis);
+    // 估算不确定时补上邻近的 n
+    const frac = Math.abs(size / p.lag - Math.round(size / p.lag));
+    if (frac > 0.2) {
+      add(size / p.lag - 0.5, p.ac * 0.9, axis);
+      add(size / p.lag + 0.5, p.ac * 0.9, axis);
+    }
+  }
+  const list = Array.from(byN.values()).sort((a, b) => b.ac - a.ac).slice(0, 4);
+  return list.map(c => ({ rows: evenBands(y0, h, c.n), cols: evenBands(x0, w, c.n), method: '周期' }));
+}
+
+/** 兼容旧接口：返回第一种定位结果（格线法优先，失败则用周期法） */
+export function detectGrid(imageData) {
+  const stats = colorStats(imageData);
+  const gaps = detectByGaps(imageData, stats);
+  if (gaps) return { rows: gaps.rows, cols: gaps.cols };
+  const pitch = detectByPitch(imageData, stats);
+  if (pitch.length) return { rows: pitch[0].rows, cols: pitch[0].cols };
+  throw new Error('未能识别出棋盘格子，请确认截图包含完整的 n×n 网格');
 }
 
 /* ------------------------------------------------------------ 2. 多点采样投票 */
@@ -565,14 +732,13 @@ function boardBox(boxes) {
 }
 
 /**
- * 从图像数据求解（含自愈回路），返回
- * { n, coords, cells, unique, solutionCount, regions, boxes, board, warnings, attempts, repaired }
- * 坐标与游戏内一致：x=列(左→右 1..n)，y=行(下→上 1..n)，左下角为 (1,1)
+ * 用某一种棋盘切分方式尝试求解（采样 -> 候选划分 -> 自愈回路 -> 校验）
+ * 返回 { result: 结果对象 | null, candidates: 尝试过的颜色划分数量 }
  */
-export function analyze(imageData) {
-  const warnings = [];
-  const { rows, cols } = detectGrid(imageData);
+function tryHypothesis(imageData, hyp) {
+  const { rows, cols } = hyp;
   const n = rows.length;
+  const warnings = [];
 
   // 多点采样投票
   const samples = [];
@@ -591,9 +757,7 @@ export function analyze(imageData) {
 
   // 候选划分（自愈回路的基础）
   const candidates = clusterCandidates(labs, n, consistency);
-  if (!candidates.length) {
-    throw new Error(`无法把颜色划分成 ${n} 种，请确认截图完整、颜色清晰`);
-  }
+  if (!candidates.length) return { result: null, candidates: 0 };
 
   // 自愈回路：按质量依次尝试每种划分，解不出就换下一种
   for (let i = 0; i < candidates.length; i++) {
@@ -611,19 +775,69 @@ export function analyze(imageData) {
     warnings.push(...w);
     const coords = cells.map(([r, c]) => ({ x: c + 1, y: n - r })).sort((a, b) => a.x - b.x);
     return {
-      n,
-      cells,
-      coords,
-      unique: solutions.length === 1,
-      solutionCount: solutions.length,
-      regions,
-      boxes,
-      board,
-      warnings,
-      attempts: i + 1,
-      repaired: !!cand.repaired,
+      candidates: candidates.length,
+      result: {
+        n,
+        cells,
+        coords,
+        unique: solutions.length === 1,
+        solutionCount: solutions.length,
+        regions,
+        boxes,
+        board,
+        warnings,
+        attempts: i + 1,
+        repaired: !!cand.repaired,
+        method: hyp.method,
+      },
     };
   }
+  return { result: null, candidates: candidates.length };
+}
 
-  throw new Error(`无解：已尝试 ${candidates.length} 种颜色划分方式仍未找到答案，请换一张清晰完整的截图`);
+/**
+ * 从图像数据求解，返回
+ * { n, coords, cells, unique, solutionCount, regions, boxes, board, warnings, attempts, repaired, method }
+ * 坐标与游戏内一致：x=列(左→右 1..n)，y=行(下→上 1..n)，左下角为 (1,1)
+ *
+ * 两层自愈：
+ *   1) 棋盘定位：先用"格线法"精确切格；不行再退回"周期法"（自相关估格子边长后均匀切分）
+ *   2) 颜色划分：每种容差一种划分，按轮廓系数排序后依次尝试，不连通或无解就换下一种
+ */
+export function analyze(imageData) {
+  const stats = colorStats(imageData);
+  const tried = [];
+  let candTotal = 0;
+
+  const run = list => {
+    for (const hyp of list) {
+      const { result, candidates } = tryHypothesis(imageData, hyp);
+      candTotal += candidates;
+      if (result) return result;
+      tried.push(`${hyp.method} n=${hyp.rows.length}`);
+    }
+    return null;
+  };
+
+  // 先试常规格线法；它失败（或识别出的格数不合理）才动用周期法
+  const gaps = detectByGaps(imageData, stats);
+  let res = gaps ? run([gaps]) : null;
+
+  if (!res) {
+    const pitchHyps = detectByPitch(imageData, stats);
+    res = run(pitchHyps);
+    if (res) {
+      res.warnings.unshift(`常规格线识别不适用，已改用周期法按 n=${res.n} 均匀切分`);
+    }
+  }
+
+  if (!res) {
+    if (!tried.length) {
+      throw new Error('未能识别出棋盘格子，请确认截图包含完整的 n×n 网格');
+    }
+    const what = tried.join('、');
+    throw new Error(`无解：已尝试 ${tried.length} 种棋盘切分方式（${what}）、` +
+      `共 ${candTotal} 种颜色划分仍未找到答案，请换一张清晰完整的截图`);
+  }
+  return res;
 }

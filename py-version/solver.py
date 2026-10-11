@@ -138,29 +138,175 @@ def _bands(counts, thresh):
     return [b for b in _runs(counts > thresh) if b[1] - b[0] >= MIN_BAND]
 
 
-def _detect_n(a):
-    """找出棋盘的行列条带。a 为 HxWx3 数组。"""
-    sat = a.max(axis=2) - a.min(axis=2)
+def _longest_run(arr, thresh):
+    """最长的一段连续超阈值区间 -> (start, end) 或 None"""
+    best, start = None, None
+    for i in range(len(arr) + 1):
+        on = i < len(arr) and arr[i] > thresh
+        if on and start is None:
+            start = i
+        elif not on and start is not None:
+            if best is None or i - start > best[1] - best[0] + 1:
+                best = (start, i - 1)
+            start = None
+    return best
+
+
+def _color_stats(a):
+    """彩色掩码 + 行/列投影(两种定位策略共用)"""
+    sat = (a.max(axis=2) - a.min(axis=2)).astype(float)
     colored = sat > SAT_MIN
     rowcnt = colored.sum(axis=1).astype(float)
-    max_row = rowcnt.max()
+    colcnt = colored.sum(axis=0).astype(float)
+    rowsat = sat.mean(axis=1)
+    colsat = sat.mean(axis=0)
+    return colored, rowcnt, colcnt, rowsat, colsat
 
-    best = None
+
+def _extent_around_longest_run(arr, thresh):
+    """
+    棋盘外框: 在"最长的一段超阈值区间"基础上, 把缝隙很小(<= 段长 10%)的相邻区间也并进来。
+    只取最长连续段会被个别偏低的像素行截断(例如某行刚好是浅色格子);
+    直接取 min/max 又会把界面上的元素并进来。
+    """
+    idx = [i for i, v in enumerate(arr) if v > thresh]
+    if not idx:
+        return None
+    longest = _longest_run(arr, thresh) or (idx[0], idx[-1])
+    max_gap = max(3, _round((longest[1] - longest[0] + 1) * 0.1))
+    lo, hi = longest
+    for v in idx:
+        if v < lo and lo - v <= max_gap:
+            lo = v
+        elif v > hi and v - hi <= max_gap:
+            hi = v
+    return (lo, hi)
+
+
+def _detect_by_gaps(a, stats):
+    """
+    策略 A(常规): 饱和度间隙法。
+    正面完整截图里格子之间有可见缝隙(低饱和), 投影会周期性地掉下来, 于是能精确切出每一格。
+    缺点: 截图被缩小/压缩后缝隙被糊平就会失效。
+    """
+    colored, rowcnt = stats[0], stats[1]
+    max_row = rowcnt.max()
     for frac in (0.45, 0.35, 0.55, 0.30, 0.60):
         rows = _pick_series(_bands(rowcnt, max_row * frac))
-        if not rows:
+        if len(rows) < 3:
             continue
         y0, y1 = rows[0][0], rows[-1][1]
         colcnt = colored[y0:y1 + 1].sum(axis=0).astype(float)
         cols = _pick_series(_bands(colcnt, colcnt.max() * frac))
-        if not cols:
+        if len(cols) != len(rows):
             continue
-        if len(rows) == len(cols):
-            best = (rows, cols)
-            break
-    if best is None:
+        return rows, cols
+    return None
+
+
+def _estimate_pitch(sig):
+    """
+    自相关估格子边长: 格子之间的缝更亮/更淡, 所以亮度、饱和度曲线都是周期信号。
+    取"自相关接近最强"里**最小**的周期, 即基频 —— 否则容易锁到 2 倍周期(把 n 估成一半)。
+    """
+    n = len(sig)
+    s = sig - float(sig.mean())
+    lo = max(3, n // 30)                     # 最多 30 格
+    hi = max(lo + 1, n // 3)                 # 至少 3 格
+    acs = []
+    for lag in range(lo, hi + 1):
+        x, y = s[:n - lag], s[lag:]
+        denom = math.sqrt(float(x @ x) * float(y @ y) + 1e-9)
+        acs.append((lag, float(x @ y) / denom))
+    if not acs:
+        return None
+    max_ac = max(ac for _, ac in acs)
+    pick = None
+    for lag, ac in acs:
+        if ac >= 0.85 * max_ac and (pick is None or lag < pick[0]):
+            pick = (lag, ac)
+    if pick is None:
+        return None
+    return {"lag": pick[0], "ac": pick[1], "n_est": n / float(pick[0])}
+
+
+def _even_bands(start, size, n):
+    """把 [start, start+size) 均匀切成 n 段"""
+    out = []
+    for i in range(n):
+        a0 = start + _round(i * size / n)
+        a1 = start + _round((i + 1) * size / n) - 1
+        out.append((a0, max(a0, a1)))
+    return out
+
+
+def _detect_by_pitch(a, stats):
+    """
+    策略 B(兜底): 周期法。
+    先用彩色像素定位棋盘外框, 再用亮度/饱和度曲线的自相关估计格子边长, 最后按 n 均匀切分。
+    适合被缩小/压缩、缝隙已糊平的截图。
+    两个轴、两种信号各给一个估算, 按自相关强度排序作为候选。
+    """
+    rowcnt, colcnt, rowsat, colsat = stats[1], stats[2], stats[3], stats[4]
+    y_run = _extent_around_longest_run(rowcnt, rowcnt.max() * 0.5)
+    if y_run is None:
+        return []
+    x_run = _extent_around_longest_run(colcnt, colcnt.max() * 0.5)
+    if x_run is None:
+        return []
+    y0, y1 = y_run
+    x0, x1 = x_run
+    h, w = y1 - y0 + 1, x1 - x0 + 1
+    if h < 100 or w < 100:                  # 太小不可能是棋盘
+        return []
+
+    block = a[y0:y1 + 1, x0:x1 + 1].astype(float)
+    row_lum = block.mean(axis=2).mean(axis=1)
+    col_lum = block.mean(axis=2).mean(axis=0)
+    row_sat = rowsat[y0:y1 + 1]
+    col_sat = colsat[x0:x1 + 1]
+
+    # 收集候选 n(去重保留最高自相关)
+    by_n = {}
+
+    def _add(v, conf):
+        v = _round(v)
+        if 3 <= v <= 30 and (v not in by_n or by_n[v] < conf):
+            by_n[v] = conf
+
+    for sig, size in ((row_sat, h), (col_sat, w), (row_lum, h), (col_lum, w)):
+        p = _estimate_pitch(sig)
+        if p is None:
+            continue
+        est = size / float(p["lag"])
+        _add(est, p["ac"])
+        # 估算不确定时补上邻近的 n
+        if abs(est - _round(est)) > 0.2:
+            _add(est - 0.5, p["ac"] * 0.9)
+            _add(est + 0.5, p["ac"] * 0.9)
+
+    ranked = sorted(by_n.items(), key=lambda kv: -kv[1])[:4]
+    return [(_even_bands(y0, h, v), _even_bands(x0, w, v)) for v, _ in ranked]
+
+
+def _detect_hypotheses(a):
+    """所有可行的棋盘切分方式(按优先级): 先常规格线法, 再周期法兜底"""
+    stats = _color_stats(a)
+    out = []
+    gaps = _detect_by_gaps(a, stats)
+    if gaps:
+        out.append((gaps[0], gaps[1], "格线"))
+    for rows, cols in _detect_by_pitch(a, stats):
+        out.append((rows, cols, "周期"))
+    return out, stats
+
+
+def _detect_n(a):
+    """找出棋盘的行列条带(兼容接口: 返回优先级最高的一种切分)。a 为 HxWx3 数组。"""
+    hyps, _ = _detect_hypotheses(a)
+    if not hyps:
         raise RuntimeError("未能识别出棋盘格子, 请确认截图包含完整的 n*n 网格")
-    rows, cols = best
+    rows, cols, _ = hyps[0]
     if len(rows) != len(cols):
         raise RuntimeError("行列数不一致: %d 行 x %d 列" % (len(rows), len(cols)))
     return rows, cols
@@ -511,15 +657,13 @@ def validate(n, regions, cells):
 
 # ---------------------------------------------------------------- 5. 完整流程
 
-def analyze(path):
-    """截图 -> 结果(含自愈回路)。返回 dict"""
-    im = Image.open(path).convert("RGB")
-    a = np.asarray(im).astype(np.int16)
-    width = a.shape[1]
-    warnings = []
-
-    rows, cols = _detect_n(a)
+def _try_hypothesis(a, width, rows, cols, method):
+    """
+    用一种棋盘切分方式尝试求解(采样 -> 候选划分 -> 自愈回路 -> 校验)。
+    返回 (结果 dict 或 None, 尝试过的颜色划分数量)
+    """
     n = len(rows)
+    warnings = []
 
     # 多点采样投票
     samples, boxes = [], []
@@ -541,7 +685,7 @@ def analyze(path):
     # 候选划分(自愈回路的基础)
     candidates = _cluster_candidates(labs, n, consistency)
     if not candidates:
-        raise RuntimeError("无法把颜色划分成 %d 种, 请确认截图完整、颜色清晰" % n)
+        return None, 0
 
     # 自愈回路: 按质量依次尝试每种划分, 解不出就换下一种
     for i, cand in enumerate(candidates):
@@ -564,10 +708,53 @@ def analyze(path):
         return {"n": n, "cells": cells, "coords": coords, "regions": regions,
                 "boxes": boxes, "board": (bx0, by0, bx1, by1), "warnings": warnings,
                 "unique": len(solutions) == 1, "solution_count": len(solutions),
-                "attempts": i + 1, "repaired": bool(cand["repaired"])}
+                "attempts": i + 1, "repaired": bool(cand["repaired"]),
+                "method": method}, len(candidates)
 
-    raise RuntimeError("无解: 已尝试 %d 种颜色划分方式仍未找到答案, 请换一张清晰完整的截图"
-                       % len(candidates))
+    return None, len(candidates)
+
+
+def analyze(path):
+    """
+    截图 -> 结果。两层自愈:
+      1) 棋盘定位: 先用"格线法"精确切格; 不行再退回"周期法"(自相关估格子边长后均匀切分)
+      2) 颜色划分: 每种容差一种划分, 按轮廓系数排序后依次尝试, 不连通或无解就换下一种
+    """
+    im = Image.open(path).convert("RGB")
+    a = np.asarray(im).astype(np.int16)
+    width = a.shape[1]
+    stats = _color_stats(a)
+
+    tried, cand_total = [], 0
+
+    def _run(hypotheses):
+        nonlocal cand_total
+        for rows, cols, method in hypotheses:
+            res, ncand = _try_hypothesis(a, width, rows, cols, method)
+            cand_total += ncand
+            if res is not None:
+                return res
+            tried.append("%s n=%d" % (method, len(rows)))
+        return None
+
+    # 先试常规格线法; 它失败才动用周期法
+    gaps = _detect_by_gaps(a, stats)
+    res = _run([(gaps[0], gaps[1], "格线")]) if gaps else None
+
+    if res is None:
+        pitch = [(rows, cols, "周期") for rows, cols in _detect_by_pitch(a, stats)]
+        res = _run(pitch)
+        if res is not None:
+            res["warnings"].insert(
+                0, "常规格线识别不适用, 已改用周期法按 n=%d 均匀切分" % res["n"])
+
+    if res is None:
+        if not tried:
+            raise RuntimeError("未能识别出棋盘格子, 请确认截图包含完整的 n*n 网格")
+        what = "、".join(tried)
+        raise RuntimeError("无解: 已尝试 %d 种棋盘切分方式(%s)、共 %d 种颜色划分仍未找到答案, "
+                           "请换一张清晰完整的截图" % (len(tried), what, cand_total))
+    return res
 
 
 # ---------------------------------------------------------------- 输出
@@ -597,6 +784,7 @@ def main():
     if args.json:
         print(json.dumps({"n": n, "unique": res["unique"],
                           "attempts": res["attempts"],
+                          "method": res["method"],
                           "coords": [{"x": x, "y": y} for x, y in coords]},
                          ensure_ascii=False))
     else:
