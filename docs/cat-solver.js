@@ -183,9 +183,19 @@ function extentAroundLongestRun(arr, thresh) {
   const longest = longestRun(arr, thresh) || [idx[0], idx[idx.length - 1]];
   const maxGap = Math.max(3, Math.round((longest[1] - longest[0] + 1) * 0.1));
   let a = longest[0], b = longest[1];
-  for (const v of idx) {
-    if (v < a && a - v <= maxGap) a = v;
-    else if (v > b && v - b <= maxGap) b = v;
+  // 向下扩展: idx 升序, 所以倒着扫; 缝隙一旦超过 maxGap 就停(再往前只会更远)
+  for (let i = idx.length - 1; i >= 0; i--) {
+    const v = idx[i];
+    if (v >= a) continue;
+    if (a - v <= maxGap) a = v;
+    else break;
+  }
+  // 向上扩展
+  for (let i = 0; i < idx.length; i++) {
+    const v = idx[i];
+    if (v <= b) continue;
+    if (v - b <= maxGap) b = v;
+    else break;
   }
   return [a, b];
 }
@@ -261,19 +271,87 @@ function evenBands(start, size, n) {
 }
 
 /**
- * 策略 B（兜底）：周期法。
- * 先用彩色像素定位棋盘外框，再用亮度/饱和度曲线的自相关估计格子边长，
- * 最后按 n 均匀切分。适合被缩小/压缩、缝隙已糊平的截图。
- * 两个轴、两种信号各给一个估算，按自相关强度排序作为候选。
+ * 棋盘外框(稳): 彩色像素稠密区域的最大连通块。
+ * 先把彩色掩码按 step 下采样(块内任一像素为彩色即算彩色), 再膨胀 DIL 格让格子缝不再阻断连通,
+ * 取最大连通块; 最后只在块范围内用 25% 阈值求像素级精确边界。
+ * 好处: 浅色格子造成的投影低谷、以及远离棋盘的界面元素都不会干扰。
  */
-function detectByPitch(imageData, stats) {
+function boardExtentByBlob(imageData, stats) {
+  const { width, height } = imageData;
+  const { colored } = stats;
+  const step = Math.max(2, Math.round(Math.min(width, height) / 120));
+  const gw = Math.ceil(width / step), gh = Math.ceil(height / step);
+  const grid = new Uint8Array(gw * gh);
+  for (let y = 0; y < height; y++) {
+    const gy = (y / step) | 0;
+    for (let x = 0; x < width; x++) {
+      if (colored[y * width + x]) grid[gy * gw + ((x / step) | 0)] = 1;
+    }
+  }
+  const DIL = 2;
+  const dil = new Uint8Array(gw * gh);
+  for (let gy = 0; gy < gh; gy++) {
+    for (let gx = 0; gx < gw; gx++) {
+      if (!grid[gy * gw + gx]) continue;
+      for (let dy = -DIL; dy <= DIL; dy++) {
+        const ny = gy + dy;
+        if (ny < 0 || ny >= gh) continue;
+        for (let dx = -DIL; dx <= DIL; dx++) {
+          const nx = gx + dx;
+          if (nx >= 0 && nx < gw) dil[ny * gw + nx] = 1;
+        }
+      }
+    }
+  }
+  const seen = new Uint8Array(gw * gh);
+  const queue = new Int32Array(gw * gh);
+  let best = null;
+  for (let start = 0; start < dil.length; start++) {
+    if (!dil[start] || seen[start]) continue;
+    let head = 0, tail = 0;
+    queue[tail++] = start;
+    seen[start] = 1;
+    let minX = gw, maxX = -1, minY = gh, maxY = -1, count = 0;
+    while (head < tail) {
+      const cur = queue[head++];
+      const cy = (cur / gw) | 0, cx = cur % gw;
+      count++;
+      if (cx < minX) minX = cx;
+      if (cx > maxX) maxX = cx;
+      if (cy < minY) minY = cy;
+      if (cy > maxY) maxY = cy;
+      if (cx > 0 && dil[cur - 1] && !seen[cur - 1]) { seen[cur - 1] = 1; queue[tail++] = cur - 1; }
+      if (cx < gw - 1 && dil[cur + 1] && !seen[cur + 1]) { seen[cur + 1] = 1; queue[tail++] = cur + 1; }
+      if (cy > 0 && dil[cur - gw] && !seen[cur - gw]) { seen[cur - gw] = 1; queue[tail++] = cur - gw; }
+      if (cy < gh - 1 && dil[cur + gw] && !seen[cur + gw]) { seen[cur + gw] = 1; queue[tail++] = cur + gw; }
+    }
+    if (!best || count > best.count) best = { count, minX, maxX, minY, maxY };
+  }
+  if (!best) return null;
+
+  const yA = best.minY * step, yB = Math.min(height - 1, (best.maxY + 1) * step - 1);
+  const xA = best.minX * step, xB = Math.min(width - 1, (best.maxX + 1) * step - 1);
+  if (yB - yA < 20 || xB - xA < 20) return null;
+  const rowCnt = new Float64Array(yB - yA + 1);
+  const colCnt = new Float64Array(xB - xA + 1);
+  for (let y = yA; y <= yB; y++) {
+    let c = 0;
+    for (let x = xA; x <= xB; x++) {
+      if (colored[y * width + x]) { c++; colCnt[x - xA]++; }
+    }
+    rowCnt[y - yA] = c;
+  }
+  const yR = extentAroundLongestRun(rowCnt, maxOf(rowCnt) * 0.25);
+  const xR = extentAroundLongestRun(colCnt, maxOf(colCnt) * 0.25);
+  if (!yR || !xR) return null;
+  return { x0: xA + xR[0], x1: xA + xR[1], y0: yA + yR[0], y1: yA + yR[1] };
+}
+
+/** 在给定外框内, 用两个轴、两种信号的自相关估计格子边长, 返回候选 n(按可信度排序) */
+function pitchCandidates(imageData, stats, ext) {
   const { data, width } = imageData;
-  const { rowCnt, colCnt, rowSat, colSat } = stats;
-  const yRun = extentAroundLongestRun(rowCnt, maxOf(rowCnt) * 0.5);
-  if (!yRun) return [];
-  const xRun = extentAroundLongestRun(colCnt, maxOf(colCnt) * 0.5);
-  if (!xRun) return [];
-  const [y0, y1] = yRun, [x0, x1] = xRun;
+  const { rowSat, colSat } = stats;
+  const { x0, x1, y0, y1 } = ext;
   const h = y1 - y0 + 1, w = x1 - x0 + 1;
   if (h < 100 || w < 100) return [];          // 太小不可能是棋盘
 
@@ -297,27 +375,56 @@ function detectByPitch(imageData, stats) {
   const rowSatSeg = Array.from(rowSat.slice(y0, y1 + 1));
   const colSatSeg = Array.from(colSat.slice(x0, x1 + 1));
 
-  // 收集候选 n（去重保留最高自相关）
   const byN = new Map();
-  const add = (n, ac, axis) => {
+  const add = (n, ac) => {
     const v = Math.round(n);
     if (v < 3 || v > 30) return;
-    if (!byN.has(v) || byN.get(v).ac < ac) byN.set(v, { n: v, ac, axis });
+    if (!byN.has(v) || byN.get(v).ac < ac) byN.set(v, { n: v, ac });
   };
-  for (const [sig, size, axis] of [[rowSatSeg, h, '行'], [colSatSeg, w, '列'],
-                                   [rowLum, h, '行'], [colLum, w, '列']]) {
+  for (const [sig, size] of [[rowSatSeg, h], [colSatSeg, w], [rowLum, h], [colLum, w]]) {
     const p = estimatePitch(sig);
     if (!p) continue;
-    add(size / p.lag, p.ac, axis);
-    // 估算不确定时补上邻近的 n
-    const frac = Math.abs(size / p.lag - Math.round(size / p.lag));
-    if (frac > 0.2) {
-      add(size / p.lag - 0.5, p.ac * 0.9, axis);
-      add(size / p.lag + 0.5, p.ac * 0.9, axis);
+    const est = size / p.lag;
+    add(est, p.ac);
+    if (Math.abs(est - Math.round(est)) > 0.2) {    // 估算不确定时补上邻近的 n
+      add(est - 0.5, p.ac * 0.9);
+      add(est + 0.5, p.ac * 0.9);
     }
   }
-  const list = Array.from(byN.values()).sort((a, b) => b.ac - a.ac).slice(0, 4);
-  return list.map(c => ({ rows: evenBands(y0, h, c.n), cols: evenBands(x0, w, c.n), method: '周期' }));
+  return Array.from(byN.values()).sort((a, b) => b.ac - a.ac).slice(0, 4);
+}
+
+/**
+ * 策略 B（兜底）：周期法。
+ * 先定位棋盘外框，再用亮度/饱和度曲线的自相关估计格子边长，最后按 n 均匀切分。
+ * 适合被缩小/压缩、缝隙已糊平的截图。
+ * 外框给两种候选：最大彩色连通块（稳）与投影阈值法（快），让求解循环依次尝试。
+ */
+function detectByPitch(imageData, stats) {
+  const extents = [];
+  const blob = boardExtentByBlob(imageData, stats);
+  if (blob) extents.push(blob);
+  const { rowCnt, colCnt } = stats;
+  const yRun = extentAroundLongestRun(rowCnt, maxOf(rowCnt) * 0.5);
+  const xRun = extentAroundLongestRun(colCnt, maxOf(colCnt) * 0.5);
+  if (yRun && xRun) {
+    const e = { x0: xRun[0], x1: xRun[1], y0: yRun[0], y1: yRun[1] };
+    const same = blob && e.x0 === blob.x0 && e.x1 === blob.x1 && e.y0 === blob.y0 && e.y1 === blob.y1;
+    if (!same) extents.push(e);
+  }
+
+  const out = [];
+  for (const ext of extents) {
+    const h = ext.y1 - ext.y0 + 1, w = ext.x1 - ext.x0 + 1;
+    for (const c of pitchCandidates(imageData, stats, ext)) {
+      out.push({
+        rows: evenBands(ext.y0, h, c.n),
+        cols: evenBands(ext.x0, w, c.n),
+        method: '周期',
+      });
+    }
+  }
+  return out;
 }
 
 /** 兼容旧接口：返回第一种定位结果（格线法优先，失败则用周期法） */

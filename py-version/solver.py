@@ -175,11 +175,22 @@ def _extent_around_longest_run(arr, thresh):
     longest = _longest_run(arr, thresh) or (idx[0], idx[-1])
     max_gap = max(3, _round((longest[1] - longest[0] + 1) * 0.1))
     lo, hi = longest
-    for v in idx:
-        if v < lo and lo - v <= max_gap:
+    # 向下扩展: idx 升序, 所以倒着扫; 缝隙一旦超过 max_gap 就停(再往前只会更远)
+    for v in reversed(idx):
+        if v >= lo:
+            continue
+        if lo - v <= max_gap:
             lo = v
-        elif v > hi and v - hi <= max_gap:
+        else:
+            break
+    # 向上扩展
+    for v in idx:
+        if v <= hi:
+            continue
+        if v - hi <= max_gap:
             hi = v
+        else:
+            break
     return (lo, hi)
 
 
@@ -240,22 +251,81 @@ def _even_bands(start, size, n):
     return out
 
 
-def _detect_by_pitch(a, stats):
+def _board_extent_by_blob(a, stats):
     """
-    策略 B(兜底): 周期法。
-    先用彩色像素定位棋盘外框, 再用亮度/饱和度曲线的自相关估计格子边长, 最后按 n 均匀切分。
-    适合被缩小/压缩、缝隙已糊平的截图。
-    两个轴、两种信号各给一个估算, 按自相关强度排序作为候选。
+    棋盘外框(稳): 彩色像素稠密区域的最大连通块。
+    先把彩色掩码按 step 下采样(块内任一像素为彩色即算彩色), 再膨胀 DIL 格让格子缝不再阻断连通,
+    取最大连通块; 最后只在块范围内用 25% 阈值求像素级精确边界。
+    好处: 浅色格子造成的投影低谷、以及远离棋盘的界面元素都不会干扰。
     """
-    rowcnt, colcnt, rowsat, colsat = stats[1], stats[2], stats[3], stats[4]
-    y_run = _extent_around_longest_run(rowcnt, rowcnt.max() * 0.5)
-    if y_run is None:
-        return []
-    x_run = _extent_around_longest_run(colcnt, colcnt.max() * 0.5)
-    if x_run is None:
-        return []
-    y0, y1 = y_run
-    x0, x1 = x_run
+    colored = stats[0]
+    height, width = colored.shape
+    step = max(2, _round(min(width, height) / 120))
+    gw, gh = -(-width // step), -(-height // step)
+    grid = np.zeros((gh, gw), dtype=bool)
+    ys, xs = np.nonzero(colored)
+    grid[ys // step, xs // step] = True
+
+    DIL = 2
+    dil = np.zeros((gh, gw), dtype=bool)
+    gy, gx = np.nonzero(grid)
+    for dy in range(-DIL, DIL + 1):
+        for dx in range(-DIL, DIL + 1):
+            ny, nx = gy + dy, gx + dx
+            ok = (ny >= 0) & (ny < gh) & (nx >= 0) & (nx < gw)
+            dil[ny[ok], nx[ok]] = True
+
+    # 最大 4 连通块(标签法)
+    seen = np.zeros((gh, gw), dtype=bool)
+    best = None
+    for sy in range(gh):
+        for sx in range(gw):
+            if not dil[sy, sx] or seen[sy, sx]:
+                continue
+            stack = [(sy, sx)]
+            seen[sy, sx] = True
+            count = 0
+            mnx = mxx = sx
+            mny = mxy = sy
+            while stack:
+                cy, cx = stack.pop()
+                count += 1
+                if cx < mnx:
+                    mnx = cx
+                if cx > mxx:
+                    mxx = cx
+                if cy < mny:
+                    mny = cy
+                if cy > mxy:
+                    mxy = cy
+                for ny, nx in ((cy - 1, cx), (cy + 1, cx), (cy, cx - 1), (cy, cx + 1)):
+                    if 0 <= ny < gh and 0 <= nx < gw and dil[ny, nx] and not seen[ny, nx]:
+                        seen[ny, nx] = True
+                        stack.append((ny, nx))
+            if best is None or count > best[0]:
+                best = (count, mnx, mxx, mny, mxy)
+    if best is None:
+        return None
+
+    _, mnx, mxx, mny, mxy = best
+    yA, yB = mny * step, min(height - 1, (mxy + 1) * step - 1)
+    xA, xB = mnx * step, min(width - 1, (mxx + 1) * step - 1)
+    if yB - yA < 20 or xB - xA < 20:
+        return None
+    sub = colored[yA:yB + 1, xA:xB + 1]
+    rowcnt = sub.sum(axis=1).astype(float)
+    colcnt = sub.sum(axis=0).astype(float)
+    y_r = _extent_around_longest_run(rowcnt, rowcnt.max() * 0.25)
+    x_r = _extent_around_longest_run(colcnt, colcnt.max() * 0.25)
+    if y_r is None or x_r is None:
+        return None
+    return {"x0": xA + x_r[0], "x1": xA + x_r[1], "y0": yA + y_r[0], "y1": yA + y_r[1]}
+
+
+def _pitch_candidates(a, stats, ext):
+    """在给定外框内, 用两个轴、两种信号的自相关估计格子边长, 返回候选 n(按可信度排序)"""
+    rowsat, colsat = stats[3], stats[4]
+    x0, x1, y0, y1 = ext["x0"], ext["x1"], ext["y0"], ext["y1"]
     h, w = y1 - y0 + 1, x1 - x0 + 1
     if h < 100 or w < 100:                  # 太小不可能是棋盘
         return []
@@ -266,7 +336,6 @@ def _detect_by_pitch(a, stats):
     row_sat = rowsat[y0:y1 + 1]
     col_sat = colsat[x0:x1 + 1]
 
-    # 收集候选 n(去重保留最高自相关)
     by_n = {}
 
     def _add(v, conf):
@@ -285,8 +354,35 @@ def _detect_by_pitch(a, stats):
             _add(est - 0.5, p["ac"] * 0.9)
             _add(est + 0.5, p["ac"] * 0.9)
 
-    ranked = sorted(by_n.items(), key=lambda kv: -kv[1])[:4]
-    return [(_even_bands(y0, h, v), _even_bands(x0, w, v)) for v, _ in ranked]
+    return sorted(by_n.items(), key=lambda kv: -kv[1])[:4]
+
+
+def _detect_by_pitch(a, stats):
+    """
+    策略 B(兜底): 周期法。
+    先定位棋盘外框, 再用亮度/饱和度曲线的自相关估计格子边长, 最后按 n 均匀切分。
+    适合被缩小/压缩、缝隙已糊平的截图。
+    外框给两种候选: 最大彩色连通块(稳)与投影阈值法(快), 让求解循环依次尝试。
+    """
+    rowcnt, colcnt = stats[1], stats[2]
+    exts = []
+    blob = _board_extent_by_blob(a, stats)
+    if blob is not None:
+        exts.append(blob)
+    y_run = _extent_around_longest_run(rowcnt, rowcnt.max() * 0.5)
+    x_run = _extent_around_longest_run(colcnt, colcnt.max() * 0.5)
+    if y_run is not None and x_run is not None:
+        e = {"x0": x_run[0], "x1": x_run[1], "y0": y_run[0], "y1": y_run[1]}
+        if blob is None or e != blob:
+            exts.append(e)
+
+    out = []
+    for ext in exts:
+        h = ext["y1"] - ext["y0"] + 1
+        w = ext["x1"] - ext["x0"] + 1
+        for v, _ in _pitch_candidates(a, stats, ext):
+            out.append((_even_bands(ext["y0"], h, v), _even_bands(ext["x0"], w, v)))
+    return out
 
 
 def _detect_hypotheses(a):
