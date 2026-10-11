@@ -220,6 +220,16 @@ export function readGrid(imageData) {
   if (k !== n) warnings.push(`按 ${n} 处理，请检查截图`);
   const regions = Int16Array.from(assign);
 
+  // 棋盘整体外框（所有格子的并集），用于裁掉截图里不相干的界面部分
+  let bx0 = Infinity, by0 = Infinity, bx1 = -Infinity, by1 = -Infinity;
+  for (const [x0, y0, x1, y1] of boxes) {
+    if (x0 < bx0) bx0 = x0;
+    if (y0 < by0) by0 = y0;
+    if (x1 > bx1) bx1 = x1;
+    if (y1 > by1) by1 = y1;
+  }
+  const board = [bx0, by0, bx1, by1];
+
   // 每种颜色必须连成一片；若被聚成多块，只保留最大连通块
   for (let key = 0; key < n; key++) {
     const { mask, comps } = connected(regions, n, key);
@@ -230,7 +240,7 @@ export function readGrid(imageData) {
       }
     }
   }
-  return { n, regions, boxes, warnings };
+  return { n, regions, boxes, board, warnings };
 }
 
 /** 检查某个编号的区域是否四连通，返回最大连通块掩码与连通块数量 */
@@ -371,11 +381,12 @@ export function validate(n, regions, cells) {
 
 /**
  * 从图像数据求解，返回
- * { n, coords:[{x,y}], cells:[[r,c]], unique, solutionCount, regions, boxes, warnings }
+ * { n, coords:[{x,y}], cells:[[r,c]], unique, solutionCount, regions, boxes, board, warnings }
+ * board = [x0,y0,x1,y1] 为棋盘整体外框（用于裁剪展示）
  * 坐标与游戏内一致：x=列(左→右 1..n)，y=行(下→上 1..n)，左下角为 (1,1)
  */
 export function analyze(imageData) {
-  const { n, regions, boxes, warnings } = readGrid(imageData);
+  const { n, regions, boxes, board, warnings } = readGrid(imageData);
   const solutions = solve(n, regions, 50);
   if (!solutions.length) {
     throw new Error('无解：请确认截图完整、棋盘颜色清晰（也可能识别出了错误的格子）');
@@ -391,6 +402,7 @@ export function analyze(imageData) {
     solutionCount: solutions.length,
     regions,
     boxes,
+    board,
     warnings,
   };
 }

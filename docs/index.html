@@ -11,44 +11,52 @@
 
 <header class="hero">
   <h1>n×n 找猫求解器</h1>
-  <p class="sub">上传游戏截图，自动求出全部小猫坐标 · 纯前端运行，图片不会上传到任何服务器</p>
+  <p class="sub">上传游戏截图，自动求出全部小猫坐标 · 纯前端运行，图片不会上传</p>
 </header>
 
 <main>
-  <section id="drop" class="card drop" tabindex="0" role="button" aria-label="选择或拖入游戏截图">
-    <div class="drop-icon">🐱</div>
-    <p class="drop-title">点击选择截图，或把图片拖到这里</p>
-    <p class="drop-hint">支持 Ctrl / ⌘ + V 直接粘贴截图</p>
-    <input type="file" id="file" accept="image/*" hidden>
-  </section>
+  <div class="stage">
+    <section id="drop" class="card drop" tabindex="0" role="button" aria-label="选择或拖入游戏截图">
+      <div class="drop-icon">🐱</div>
+      <p class="drop-title">点击选择截图，或把图片拖到这里</p>
+      <p class="drop-hint">支持 Ctrl / ⌘ + V 直接粘贴截图</p>
+      <input type="file" id="file" accept="image/*" hidden>
+    </section>
 
-  <p id="error" class="error hidden"></p>
+    <section id="result" class="card hidden">
+      <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
+      <p class="crop-hint">已自动裁去截图中的界面部分，只保留 n×n 棋盘</p>
+    </section>
+  </div>
 
-  <section id="result" class="card hidden">
-    <div id="meta" class="meta"></div>
-    <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
-    <h2 class="h2">小猫坐标</h2>
-    <p class="note">坐标与游戏一致：x = 列（自左向右），y = 行（自下而上），左下角为 (1,1)</p>
-    <div id="coords" class="coords"></div>
-    <div class="actions">
-      <button id="copy" class="btn">复制坐标</button>
-      <button id="again" class="btn ghost">换一张</button>
-    </div>
-  </section>
+  <aside class="panel">
+    <p id="error" class="error hidden"></p>
 
-  <section class="card">
-    <h2 class="h2">规则与用法</h2>
-    <ol class="rules">
-      <li>每种颜色恰好 1 只猫</li>
-      <li>每行每列恰好 1 只猫</li>
-      <li>任意两只猫不能相邻 —— 上下左右和对角线都不行（贴边 5 格、贴角 3 格也不能有）</li>
-    </ol>
-    <p class="note">
-      页面按上面三条规则枚举验证，通常得到唯一解；若关卡本身有多解，会同时给出解的个数。
-      识别失败时请换一张完整、无遮挡、颜色清晰的棋盘截图。
-      命令行版本见 <a href="https://github.com/22ABLE22/n-times-n-cat-solver" target="_blank" rel="noopener">GitHub 仓库</a> 的 <code>py-version/</code>。
-    </p>
-  </section>
+    <section id="panel-result" class="card hidden">
+      <div id="meta" class="meta"></div>
+      <h2 class="h2">小猫坐标</h2>
+      <p class="note">坐标与游戏一致：x = 列（自左向右），y = 行（自下而上），左下角为 (1,1)</p>
+      <div id="coords" class="coords"></div>
+      <div class="actions">
+        <button id="copy" class="btn">复制坐标</button>
+        <button id="again" class="btn ghost">换一张</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2 class="h2">规则与说明</h2>
+      <ol class="rules">
+        <li>每种颜色恰好 1 只猫</li>
+        <li>每行每列恰好 1 只猫</li>
+        <li>任意两只猫不能相邻 —— 上下左右和对角线都不行（贴边 5 格、贴角 3 格也不能有）</li>
+      </ol>
+      <p class="note">
+        页面按上面三条规则枚举验证，通常得到唯一解；若关卡本身有多解，会同时给出解的个数。
+        识别失败时请换一张完整、无遮挡、颜色清晰的棋盘截图。
+        命令行版本见 <a href="https://github.com/22ABLE22/n-times-n-cat-solver" target="_blank" rel="noopener">GitHub 仓库</a> 的 <code>py-version/</code>。
+      </p>
+    </section>
+  </aside>
 </main>
 
 <footer class="foot">
