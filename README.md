@@ -1,6 +1,9 @@
-# n-times-n 找猫求解器
+# Catspotter
+
+**截图进去，猫坐标出来。**
 
 从游戏截图中自动识别 n×n 彩色棋盘，并按游戏规则求出全部 n 只小猫的坐标。
+（名字取自 *spot the cat* —— 把这游戏里"找猫"这一步自动化。）
 
 提供两个版本，算法完全一致：
 
@@ -29,7 +32,7 @@
 
 ## 网页版
 
-访问 <https://22able22.github.io/n-times-n-cat-solver/>（或在本地直接用浏览器打开 `docs/index.html`）。
+访问 <https://22able22.github.io/catspotter/>（或在本地直接用浏览器打开 `docs/index.html`）。
 
 - 点击选择、拖入、或 `Ctrl/⌘ + V` 粘贴截图
 - 页面会圈出答案，并列出每只猫的坐标，可一键复制
@@ -48,7 +51,7 @@ python solver.py 截图.jpg --json          # JSON 输出(方便程序调用)
 solve.bat 截图.jpg                        # Windows 下一键运行
 ```
 
-`example/` 目录下提供 12 张示例截图，可直接试用：
+`example/` 目录下提供 14 张示例截图，可直接试用：
 
 ```
 python py-version/solver.py example/example01.jpg --mark
@@ -144,7 +147,7 @@ python py-version/solver.py example/example01.jpg --mark
 ```
 
 网页版的 `cat-solver.js` 与 `py-version/solver.py` 是同一套算法：
-已在 12 张示例截图上逐例比对（含裁剪外框、尝试次数），两者的 n、唯一性与全部坐标完全一致。
+已在全部示例截图上逐例比对（含裁剪外框、尝试次数），两者的 n、唯一性与全部坐标完全一致。
 
 ## 许可证
 

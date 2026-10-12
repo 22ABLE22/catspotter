@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
-n-times-n 找猫求解器
-====================
+Catspotter — 从游戏截图找出所有猫的位置
+========================================
 输入: 一张游戏截图(n*n 纯色格子, 每种颜色连成一片)
 输出: n 只小猫的坐标 (列, 行), 与游戏内坐标一致(左下角为 (1,1))
 
@@ -856,7 +856,7 @@ def analyze(path):
 # ---------------------------------------------------------------- 输出
 
 def main():
-    ap = argparse.ArgumentParser(description="n-times-n 找猫求解器")
+    ap = argparse.ArgumentParser(description="Catspotter — 从游戏截图找出所有猫的位置")
     ap.add_argument("image", help="游戏截图路径")
     ap.add_argument("--mark", nargs="?", const="", default=None, metavar="OUT.png",
                     help="保存标注了猫坐标的图片; 不带参数时自动保存为与截图同名的 .png")

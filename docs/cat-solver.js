@@ -1,5 +1,5 @@
 /**
- * cat-solver.js — n×n 找猫求解器核心算法（纯 JS，不依赖 DOM）
+ * cat-solver.js — Catspotter 核心算法（纯 JS，不依赖 DOM）
  *
  * 与 py-version/solver.py 一一对应，流程：
  *   1) 定位棋盘：按饱和度取"彩色"像素，对行/列投影找出等间距条带，得到 n 与每格边界
