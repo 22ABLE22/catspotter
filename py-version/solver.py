@@ -57,6 +57,7 @@ SAMPLE_OFFSETS = (
 )
 VOTE_DELTA_E = 2.5           # 投票时判定"同一种颜色"的 ΔE 阈值
 LOW_CONSISTENCY = 0.6        # 低于此共识度的格子会被提示
+OCCLUDED_SAT = 30            # 采样色饱和度低于此值 -> 判为被图标遮挡(游戏格子都较鲜艳)
 
 
 # ---------------------------------------------------------------- 小工具
@@ -616,6 +617,89 @@ def _cluster_candidates(labs, n, consistency):
     return sorted(out.values(), key=lambda c: (-c["score"], c["repaired"]))
 
 
+def _occluded_cells(samples, consistency):
+    """
+    找出"被遮挡"的格子: 游戏里会预先点亮一只猫, 猫脸图标会盖住整个格子,
+    采样到的颜色和该格真实底色毫无关系。
+
+    两个判据(满足任一即可):
+      1) 共识度低 —— 5 个采样块投票不成一致(图标有深浅层次时会出现);
+      2) 采样块的饱和度极低 —— 猫脸图标是灰/白/黑色系, 而游戏格子的饱和度都较高。
+         这条很重要: 如果图标颜色恰好均匀, 5 块会"一致地错", 共识度是 1.0,
+         光靠判据 1 会漏掉。
+    """
+    out = []
+    for i, s in enumerate(samples):
+        rgb = s["rgb"]
+        sat = max(rgb) - min(rgb)
+        if consistency[i] < LOW_CONSISTENCY or sat < OCCLUDED_SAT:
+            out.append(i)
+    return out
+
+
+def _assign_with_occlusion(labs, n, consistency, known):
+    """
+    把被遮挡格子从聚类中摘出去, 聚完再回填。
+
+    为什么必须先摘出去: 被遮挡格的颜色是图标色(灰/白/黑), 它会被单独聚成一簇,
+    于是原来的某种颜色被拆成"图标色 + 真实色"两簇, 簇数变成 n+1;
+    自愈回路去重后往往只剩这一个错误划分, 于是整体无解。
+
+    回填依据(比"找最近颜色"可靠得多):
+      1) 颜色区域必须四连通 —— 所以该格的颜色必然出现在它的四邻格里,
+         候选色只需从邻格中取, 不用在全部 n 种颜色里猜;
+      2) 填入后不能把某种颜色拆成两块;
+      3) 优先选"填入后该颜色区域大小更接近平均(n 格)"的候选。
+    """
+    idx = [i for i in range(n * n) if not known or known[i]]
+    sub_labs = [labs[i] for i in idx]
+    sub_cons = [consistency[i] for i in idx]
+    sub_cands = _cluster_candidates(sub_labs, n, sub_cons)
+    if not sub_cands:
+        return None
+
+    hidden = [i for i in range(n * n) if known and not known[i]]
+    results = []
+    for cand in sub_cands:
+        full = np.full(n * n, -1, dtype=int)
+        for j, cell in enumerate(idx):
+            full[cell] = cand["assign"][j]
+
+        ok = True
+        for cell in hidden:
+            r, c = cell // n, cell % n
+            around = set()
+            for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+                ny, nx = r + dy, c + dx
+                if 0 <= ny < n and 0 <= nx < n:
+                    q = ny * n + nx
+                    if full[q] >= 0:
+                        around.add(int(full[q]))
+            if not around:
+                ok = False
+                break
+
+            best = None
+            for key in around:
+                full[cell] = key
+                _, ncomp = _connected(full, n, key)
+                if ncomp != 1:
+                    continue
+                size = int((full == key).sum())
+                dev = abs(size - n)          # 理想情况每种颜色正好 n 格
+                if best is None or dev < best[0]:
+                    best = (dev, key)
+            if best is None:
+                ok = False
+                break
+            full[cell] = best[1]
+        if not ok:
+            continue
+        results.append({"assign": [int(v) for v in full], "repaired": cand["repaired"],
+                        "score": cand["score"], "hidden": hidden})
+    return results
+
+
 # ---------------------------------------------------------------- 连通性
 
 def _connected(regions, n, key):
@@ -772,9 +856,6 @@ def _try_hypothesis(a, width, rows, cols, method):
             samples.append(_sample_cell(a, width, cx0, ry0, cx1, ry1))
             boxes.append((cx0, ry0, cx1, ry1))
     consistency = [s["consistency"] for s in samples]
-    low_n = sum(1 for c in consistency if c < LOW_CONSISTENCY)
-    if low_n:
-        warnings.append("%d 个格子采样不一致, 识别可能不稳" % low_n)
     labs = [s["lab"] for s in samples]
 
     bx0 = min(b[0] for b in boxes)
@@ -783,7 +864,26 @@ def _try_hypothesis(a, width, rows, cols, method):
     by1 = max(b[3] for b in boxes)
 
     # 候选划分(自愈回路的基础)
-    candidates = _cluster_candidates(labs, n, consistency)
+    # 若存在被遮挡的格子(游戏预亮的猫脸盖住了底色), 先把它们摘出去再聚类,
+    # 否则图标色会被当成一种新颜色, 把某种颜色拆成两簇, 导致划分全部作废。
+    hidden = _occluded_cells(samples, consistency)
+    if hidden and len(hidden) < n * n / 2:
+        known = [True] * (n * n)
+        for i in hidden:
+            known[i] = False
+        filled = _assign_with_occlusion(labs, n, consistency, known)
+        if filled:
+            candidates = filled
+            names = ["第 %d 行第 %d 列" % (i // n + 1, i % n + 1) for i in hidden]
+            warnings.append("%d 个格子被遮挡(%s), 已按邻格与连通性回填颜色"
+                            % (len(hidden), "、".join(names)))
+        else:
+            warnings.append("%d 个格子被遮挡且无法回填, 识别可能失败" % len(hidden))
+            candidates = _cluster_candidates(labs, n, consistency)
+    else:
+        if hidden:
+            warnings.append("%d 个格子采样不一致, 识别可能不稳" % len(hidden))
+        candidates = _cluster_candidates(labs, n, consistency)
     if not candidates:
         return None, 0
 

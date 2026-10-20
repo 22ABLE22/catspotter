@@ -30,6 +30,7 @@ const SAMPLE_OFFSETS = [
 ];
 const VOTE_DELTA_E = 2.5;      // 投票时判定"同一种颜色"的 ΔE 阈值
 const LOW_CONSISTENCY = 0.6;   // 低于此共识度的格子会被提示
+const OCCLUDED_SAT = 30;       // 采样色饱和度低于此值 -> 判为被图标遮挡(游戏格子都较鲜艳)
 
 /* ------------------------------------------------------------ 小工具 */
 
@@ -664,6 +665,92 @@ function clusterCandidates(labs, n, consistency) {
   return Array.from(out.values()).sort((x, y) => (y.score - x.score) || (x.repaired - y.repaired));
 }
 
+/* -------------------------------------------------- 被遮挡格子的回填 */
+
+/**
+ * 找出"被遮挡"的格子：游戏里会预先点亮一只猫，猫脸图标会盖住整个格子，
+ * 采样到的颜色和该格真实底色毫无关系。
+ *
+ * 两个判据（满足任一即可）：
+ *   1) 共识度低 —— 5 个采样块投票不成一致（图标有深浅层次时会出现）；
+ *   2) 采样块的饱和度极低 —— 猫脸图标是灰/白/黑色系，而游戏格子的饱和度都较高。
+ *      这条很重要：如果图标颜色恰好均匀，5 块会"一致地错"，共识度是 1.0，
+ *      光靠判据 1 会漏掉。
+ */
+function occludedCells(samples, consistency) {
+  const out = [];
+  for (let i = 0; i < samples.length; i++) {
+    const rgb = samples[i].rgb;
+    const sat = Math.max(rgb[0], rgb[1], rgb[2]) - Math.min(rgb[0], rgb[1], rgb[2]);
+    if (consistency[i] < LOW_CONSISTENCY || sat < OCCLUDED_SAT) out.push(i);
+  }
+  return out;
+}
+
+/**
+ * 把被遮挡格子从聚类中摘出去，聚完再回填。
+ *
+ * 为什么必须先摘出去：被遮挡格的颜色是图标色（灰/白/黑），它会被单独聚成一簇，
+ * 于是原来的某种颜色被拆成"图标色 + 真实色"两簇，簇数变成 n+1；
+ * 自愈回路去重后往往只剩这一个错误划分，于是整体无解。
+ *
+ * 回填依据（比"找最近颜色"可靠得多）：
+ *   1) 颜色区域必须四连通 —— 所以该格的颜色必然出现在它的四邻格里，
+ *      候选色只需从邻格中取，不用在全部 n 种颜色里猜；
+ *   2) 填入后不能把某种颜色拆成两块；
+ *   3) 优先选"填入后该颜色区域大小更接近平均（n 格）"的候选。
+ */
+function assignWithOcclusion(labs, n, consistency, known) {
+  // known: 参与聚类的格子索引；返回完整 n*n 的 assign，或 null
+  const idx = [];
+  for (let i = 0; i < n * n; i++) if (!known || known[i]) idx.push(i);
+
+  const subLabs = idx.map(i => labs[i]);
+  const subCons = idx.map(i => consistency[i]);
+  const subCands = clusterCandidates(subLabs, n, subCons);
+  if (!subCands.length) return null;
+
+  const hidden = [];
+  for (let i = 0; i < n * n; i++) if (known && !known[i]) hidden.push(i);
+
+  const results = [];
+  for (const cand of subCands) {
+    const full = new Int16Array(n * n).fill(-1);
+    idx.forEach((cell, j) => { full[cell] = cand.assign[j]; });
+
+    // 逐个回填被遮挡格：每格只从"已确定的四邻格"里选颜色
+    let ok = true;
+    for (const cell of hidden) {
+      const r = (cell / n) | 0, c = cell % n;
+      const around = new Set();
+      for (const [dy, dx] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const ny = r + dy, nx = c + dx;
+        if (ny < 0 || ny >= n || nx < 0 || nx >= n) continue;
+        const q = ny * n + nx;
+        if (full[q] >= 0) around.add(full[q]);
+      }
+      if (!around.size) { ok = false; break; }
+
+      // 对每个候选色试填，要求不破坏连通性；再按区域大小偏差挑最优
+      let best = null;
+      for (const key of around) {
+        full[cell] = key;
+        const { comps } = connected(full, n, key);
+        if (comps !== 1) continue;
+        let size = 0;
+        for (let i = 0; i < n * n; i++) if (full[i] === key) size++;
+        const dev = Math.abs(size - n);          // 理想情况每种颜色正好 n 格
+        if (!best || dev < best.dev) best = { key, dev };
+      }
+      if (!best) { ok = false; break; }
+      full[cell] = best.key;
+    }
+    if (!ok) continue;
+    results.push({ assign: Array.from(full), repaired: cand.repaired, score: cand.score, hidden });
+  }
+  return results;
+}
+
 /* ------------------------------------------------------------ 连通性 */
 
 /** 检查某编号区域是否四连通，返回最大连通块掩码与连通块数量 */
@@ -857,13 +944,30 @@ function tryHypothesis(imageData, hyp) {
     }
   }
   const consistency = samples.map(s => s.consistency);
-  const lowN = consistency.filter(c => c < LOW_CONSISTENCY).length;
-  if (lowN) warnings.push(`${lowN} 个格子采样不一致，识别可能不稳`);
   const labs = samples.map(s => s.lab);
   const board = boardBox(boxes);
 
   // 候选划分（自愈回路的基础）
-  const candidates = clusterCandidates(labs, n, consistency);
+  // 若存在被遮挡的格子（游戏预亮的猫脸盖住了底色），先把它们摘出去再聚类，
+  // 否则图标色会被当成一种新颜色，把某种颜色拆成两簇，导致划分全部作废。
+  const hidden = occludedCells(samples, consistency);
+  let candidates;
+  if (hidden.length && hidden.length < n * n / 2) {
+    const known = new Uint8Array(n * n).fill(1);
+    for (const i of hidden) known[i] = 0;
+    const filled = assignWithOcclusion(labs, n, consistency, known);
+    if (filled && filled.length) {
+      candidates = filled;
+      const names = hidden.map(i => `第 ${((i / n) | 0) + 1} 行第 ${(i % n) + 1} 列`);
+      warnings.push(`${hidden.length} 个格子被遮挡（${names.join('、')}），已按邻格与连通性回填颜色`);
+    } else {
+      warnings.push(`${hidden.length} 个格子被遮挡且无法回填，识别可能失败`);
+      candidates = clusterCandidates(labs, n, consistency);
+    }
+  } else {
+    if (hidden.length) warnings.push(`${hidden.length} 个格子采样不一致，识别可能不稳`);
+    candidates = clusterCandidates(labs, n, consistency);
+  }
   if (!candidates.length) return { result: null, candidates: 0 };
 
   // 自愈回路：按质量依次尝试每种划分，解不出就换下一种
