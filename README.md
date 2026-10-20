@@ -13,8 +13,9 @@
 可通过以下渠道玩到：
 
 - **Android / Google Play**：[Meowdoku: 脑力解谜游戏](https://play.google.com/store/apps/details?id=com.oakever.meowdoku)（发行商 Oakever Games）
-- 【哔哩哔哩】移动端游戏小程序【数独爱消消】
-- 微信小程序【数独爱消消】
+- **哔哩哔哩（网页入口）**：[数独爱消消](https://miniapp.bilibili.com/game/biligame8829fe8973b3e9e9)
+- **微信小程序**：`#小程序://数独爱消消/7B5WEnLxAjgBKJj`
+  （复制整段到微信聊天框或搜索框打开；这是微信小程序的分享路径，不是网址，网页里无法直接点击）
 
 棋盘由 n×n 个纯色格子组成（共 n 种颜色，每种颜色连成一片），需要在其中找出 n 只小猫。
 本工具的输入就是这类关卡的游戏截图，与具体平台无关——手机截图、模拟器截图都可以。
