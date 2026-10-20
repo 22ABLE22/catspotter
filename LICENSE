@@ -2,6 +2,32 @@ MIT License
 
 Copyright (c) 2026 22ABLE22
 
+---------------------------------------------------------------------------
+SCOPE / 适用范围
+
+The MIT License below applies ONLY to the source code of this project,
+i.e. the HTML, CSS and JavaScript files under `docs/`, and the Python
+scripts under `py-version/`.
+
+It does NOT apply to the game screenshots in `example/`, which are the
+copyrighted works of the respective game developers/publishers. Those
+files are included solely for technical demonstration, are NOT licensed
+to you by this project, and you must obtain permission from their
+rights holders before reusing them.
+
+Game names, trademarks and icons mentioned in the documentation belong
+to their respective owners and are used for identification only.
+
+以下 MIT 许可仅适用于本项目的**源代码**（`docs/` 下的 HTML/CSS/JavaScript
+与 `py-version/` 下的 Python 脚本）。
+
+它**不适用于** `example/` 目录中的游戏截图——那些是游戏开发者/发行商的
+受版权保护作品，本项目仅为技术演示而引用，不向你授予任何使用权；
+如需复用，请自行向权利人取得许可。
+
+文档中提及的游戏名称、商标与图标归各自权利人所有，仅作说明性使用。
+---------------------------------------------------------------------------
+
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights

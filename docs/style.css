@@ -48,6 +48,7 @@ main {
 
 .h2 { margin: 0 0 8px; font-size: 15px; }
 .note { margin: 0; color: var(--muted); font-size: 13px; }
+.note.small { font-size: 12px; line-height: 1.5; opacity: .85; }
 .hidden { display: none !important; }
 
 /* ---------------- 上传区 ---------------- */
