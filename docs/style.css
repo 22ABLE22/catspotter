@@ -158,6 +158,8 @@ a { color: var(--accent); }
 }
 
 .foot { max-width: 1240px; margin: 18px auto 0; text-align: center; color: var(--muted); font-size: 12.5px; }
+.foot a { color: inherit; text-decoration: none; border-bottom: 1px solid transparent; }
+.foot a:hover { color: var(--accent); border-bottom-color: currentColor; }
 
 /* ---------------- 宽屏：双栏 + 整页不超出视口 ---------------- */
 
