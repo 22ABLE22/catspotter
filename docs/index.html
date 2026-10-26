@@ -3,237 +3,75 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Catspotter 找猫器 · 从游戏截图算出全部小猫坐标</title>
-<meta name="description" content="上传一张找猫关卡截图，自动识别 n×n 彩色棋盘并按规则算出全部小猫坐标。纯前端运行，图片不会上传，缩放截图与预亮猫遮挡都能处理。">
-<meta name="theme-color" content="#f7f6f3">
-<meta property="og:type" content="website">
-<meta property="og:title" content="Catspotter 找猫器 · 从游戏截图算出全部小猫坐标">
-<meta property="og:description" content="自动识别 6×6 到 16×16 彩色棋盘，按三条规则求解全部小猫坐标。纯前端运行，图片不会上传。">
-<meta property="og:url" content="https://22able22.github.io/catspotter/">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='14' fill='%231a1c22'/%3E%3Cpath d='M18 22l4-8 6 5h8l6-5 4 8v2a14 14 0 0 1-28 0z' fill='%23ffd9a0'/%3E%3Ccircle cx='26' cy='30' r='2.4' fill='%231a1c22'/%3E%3Ccircle cx='38' cy='30' r='2.4' fill='%231a1c22'/%3E%3Ccircle cx='32' cy='46' r='9' fill='none' stroke='%23ea580c' stroke-width='3.4'/%3E%3C/svg%3E">
+<title>Catspotter — 从游戏截图找出所有猫的位置</title>
+<meta name="description" content="上传游戏截图，自动识别 n×n 彩色棋盘并求出全部小猫坐标。纯前端运行，图片不会上传。">
 <link rel="stylesheet" href="style.css">
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "FAQPage",
-  "mainEntity": [
-    { "@type": "Question", "name": "支持哪些游戏的截图？", "acceptedAnswer": { "@type": "Answer", "text": "任何采用同一条规则的找猫类关卡都可以，例如 Meowdoku 与数独爱消消：n×n 纯色棋盘，n 种颜色各连成一片，每种颜色一只猫，每行每列一只猫，任意两只猫八邻不相邻。输入只是截图，与平台和来源无关。" } },
-    { "@type": "Question", "name": "图片会被上传吗？", "acceptedAnswer": { "@type": "Answer", "text": "不会。识别与求解全部在你的浏览器内完成，页面不请求任何后端，图片数据不离开本机。断网状态下打开页面同样可用。" } },
-    { "@type": "Question", "name": "识别失败怎么办？", "acceptedAnswer": { "@type": "Answer", "text": "换一张完整、无遮挡、颜色清晰的棋盘截图即可。棋盘被界面元素遮挡、截图过度模糊、或某种颜色只剩一格且恰好被猫脸盖住时，信息不足无法恢复。" } },
-    { "@type": "Question", "name": "为什么会提示有多个解？", "acceptedAnswer": { "@type": "Answer", "text": "页面按三条规则枚举全部合法放置（上限 50 个）。绝大多数关卡只有唯一解；若关卡本身存在多解，页面会报告解的个数并给出第一个，此时可对照游戏内提示确认。" } },
-    { "@type": "Question", "name": "坐标怎么读？", "acceptedAnswer": { "@type": "Answer", "text": "与游戏画面一致：x 是列，自左向右从 1 开始；y 是行，自下而上从 1 开始，左下角为 (1,1)。" } },
-    { "@type": "Question", "name": "能在手机上用吗？", "acceptedAnswer": { "@type": "Answer", "text": "可以。页面自适应手机宽度，支持从相册选图与长按粘贴，识别在手机上本地完成，一般一秒以内。" } },
-    { "@type": "Question", "name": "有命令行版本吗？", "acceptedAnswer": { "@type": "Answer", "text": "有。GitHub 仓库的 py-version 目录提供 Python 版本，算法与网页版完全一致，已在示例截图上逐例比对坐标一致，适合批量处理与二次开发。" } },
-    { "@type": "Question", "name": "这是游戏的官方工具吗？", "acceptedAnswer": { "@type": "Answer", "text": "不是。本项目是第三方开源学习工具，与游戏及其开发者、发行商无任何关联，未获授权或认可；不含也不提供游戏本体、资源文件、破解或任何绕过付费与广告的功能。" } }
-  ]
-}
-</script>
 </head>
 <body>
 
-<a class="skip" href="#tool">跳到识别区</a>
+<header class="hero">
+  <h1>Catspotter</h1>
+  <p class="sub">上传游戏截图，自动求出全部小猫坐标 · 纯前端运行，图片不会上传</p>
+</header>
 
-<nav class="nav" aria-label="主导航">
-  <span class="nav-brand"><svg class="mark" viewBox="0 0 64 64" width="20" height="20" aria-hidden="true"><rect width="64" height="64" rx="14" fill="currentColor"/><path d="M18 22l4-8 6 5h8l6-5 4 8v2a14 14 0 0 1-28 0z" fill="#ffd9a0"/><circle cx="32" cy="46" r="9" fill="none" stroke="#ea580c" stroke-width="3.4"/></svg>Catspotter</span>
-  <div class="nav-links">
-    <a href="#how">识别原理</a>
-    <a href="#faq">常见问题</a>
-    <a href="https://github.com/22ABLE22/catspotter" target="_blank" rel="noopener" class="nav-gh">GitHub</a>
+<main>
+  <div class="stage">
+    <section id="drop" class="card drop" tabindex="0" role="button" aria-label="选择或拖入游戏截图">
+      <div class="drop-icon">🐱</div>
+      <p class="drop-title">点击选择截图，或把图片拖到这里</p>
+      <p class="drop-hint">支持 Ctrl / ⌘ + V 直接粘贴截图</p>
+      <input type="file" id="file" accept="image/*" hidden>
+    </section>
+
+    <section id="result" class="card hidden">
+      <div class="canvas-wrap"><canvas id="canvas"></canvas></div>
+      <p class="crop-hint">已自动裁去截图中的界面部分，只保留 n×n 棋盘</p>
+    </section>
   </div>
-</nav>
 
-<main id="main">
+  <aside class="panel">
+    <p id="error" class="error hidden"></p>
 
-  <!-- ============ 首屏 ============ -->
-  <header class="hero">
-    <div class="hero-copy">
-      <p class="eyebrow">找猫关卡辅助 · 纯前端工具</p>
-      <h1 class="h1">截一张游戏图，<br>算出全部小猫的坐标</h1>
-      <p class="lede">自动识别 6×6 到 16×16 的彩色棋盘，按三条规则求解每只猫的位置。识别与计算全部在浏览器里完成，图片不会上传。</p>
-      <div class="hero-actions">
-        <button id="heroPick" class="btn primary" type="button">上传截图开始识别</button>
-        <a href="#how" class="btn ghost">了解识别原理</a>
+    <section id="panel-result" class="card hidden">
+      <div id="meta" class="meta"></div>
+      <h2 class="h2">小猫坐标</h2>
+      <p class="note">坐标与游戏一致：x = 列（自左向右），y = 行（自下而上），左下角为 (1,1)</p>
+      <div id="coords" class="coords"></div>
+      <div class="actions">
+        <button id="copy" class="btn">复制坐标</button>
+        <button id="again" class="btn ghost">换一张</button>
       </div>
-      <p class="proof">开发期实测 15 张真实截图（8×8 至 16×16，含缩小图与遮挡图）全部一次命中唯一解。</p>
-    </div>
+    </section>
 
-    <div class="hero-demo" aria-hidden="true">
-      <div class="demo-frame">
-        <div class="demo-head">
-          <span class="demo-dotrow"><i></i><i></i><i></i></span>
-          <span class="demo-title">6 × 6 · 求解演示</span>
-        </div>
-        <div class="demo-board" id="demoBoard"></div>
-        <div class="demo-foot"><span id="demoStatus">等待演示</span></div>
-      </div>
-    </div>
-  </header>
-
-  <!-- ============ 工具（主行动区） ============ -->
-  <section class="tool" id="tool" aria-label="截图识别">
-    <div class="stage">
-      <section id="drop" class="card drop" tabindex="0" role="button" aria-label="选择或拖入游戏截图">
-        <div class="drop-icon"><svg viewBox="0 0 48 48" width="44" height="44" aria-hidden="true"><path d="M10 30v6a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-6" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"/><path d="M24 8v22m0 0l-8-8m8 8l8-8" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
-        <p class="drop-title">点击选择截图，或把图片拖到这里</p>
-        <p class="drop-hint">也支持 Ctrl 或 ⌘ 加 V 直接粘贴</p>
-        <input type="file" id="file" accept="image/*" hidden>
-      </section>
-
-      <section id="loading" class="card skel hidden" aria-live="polite">
-        <div class="skel-board"></div>
-        <p class="skel-text">识别中：定位棋盘、采样颜色、求解坐标，全部在本地进行…</p>
-      </section>
-
-      <section id="result" class="card result hidden">
-        <div class="canvas-wrap"><canvas id="canvas" role="img" aria-label="已标注小猫位置的棋盘截图"></canvas></div>
-        <p class="crop-hint">已自动裁去截图中的界面部分，只保留 n×n 棋盘</p>
-      </section>
-    </div>
-
-    <aside class="panel">
-      <p id="error" class="error hidden" role="alert"></p>
-
-      <section id="panel-result" class="card hidden">
-        <div id="meta" class="meta" aria-live="polite"></div>
-        <h2 class="h2">小猫坐标</h2>
-        <p class="note">坐标与游戏一致：x 为列（自左向右），y 为行（自下而上），左下角为 (1,1)</p>
-        <div id="coords" class="coords"></div>
-        <div class="actions">
-          <button id="copy" class="btn primary" type="button">复制坐标</button>
-          <button id="again" class="btn ghost" type="button">换一张</button>
-        </div>
-      </section>
-
-      <section class="card">
-        <h2 class="h2">三条规则</h2>
-        <ol class="rules">
-          <li>每种颜色恰好 1 只猫</li>
-          <li>每行每列恰好 1 只猫</li>
-          <li>任意两只猫不能相邻：上下左右和对角线都不行（贴边格周围 5 格、贴角格 3 格也不能有）</li>
-        </ol>
-        <p class="note small">
-          页面按这三条规则枚举验证，通常得到唯一解；关卡本身多解时会给出解的个数。
-          命令行版本见 <a href="https://github.com/22ABLE22/catspotter" target="_blank" rel="noopener">GitHub 仓库</a> 的 <code>py-version/</code>。
-        </p>
-      </section>
-    </aside>
-  </section>
-
-  <!-- ============ 标语逐词显现 ============ -->
-  <section class="tagline" id="tagline" aria-label="核心理念">
-    <p class="tag-line" data-words>每种颜色一只猫，每行每列一只猫，任何两只猫都不相邻。</p>
-    <p class="tag-line" data-words>三条规则，一个答案，一次截图就能算给你看。</p>
-  </section>
-
-  <!-- ============ 识别原理 ============ -->
-  <section class="how" id="how" aria-labelledby="howTitle">
-    <h2 class="section-title" id="howTitle">三步完成，遇到难题会自动兜底</h2>
-    <div class="steps">
-      <article class="card step reveal">
-        <span class="step-no">01</span>
-        <h3 class="h3">定位棋盘</h3>
-        <p>先按格线缝隙定位；截图被缩小、缝隙被压糊时，自动改用亮度与饱和度的自相关求格子边长。两种外框、多个候选边长一起试，直到切分成立。</p>
-      </article>
-      <article class="card step reveal">
-        <span class="step-no">02</span>
-        <h3 class="h3">读出颜色</h3>
-        <p>每格取中心加四象限共 5 个小块投票取共识色，压到圆角或描边的采样会被排除。颜色在感知均匀的 CIELAB 空间聚类，容差从宽到严逐级自愈。</p>
-      </article>
-      <article class="card step reveal">
-        <span class="step-no">03</span>
-        <h3 class="h3">求解校验</h3>
-        <p>位掩码回溯加前向检查，统计解的个数；输出前再用独立校验函数复核三条规则，圈出猫位并列出坐标，确认无误才展示给你。</p>
-      </article>
-    </div>
-  </section>
-
-  <!-- ============ 能力与收益 ============ -->
-  <section class="benefits" aria-labelledby="benTitle">
-    <h2 class="section-title" id="benTitle">为什么它认得出别人认不出的图</h2>
-    <div class="ben-grid">
-      <article class="card ben reveal">
-        <h3 class="h3">缩小过的截图也能识别</h3>
-        <p>格线法失效时自动切换周期法。实测把 5 张原图压到 560px 做压力测试，全部一次解出，且坐标与原图完全一致。</p>
-      </article>
-      <article class="card ben reveal">
-        <h3 class="h3">预亮的猫不干扰结果</h3>
-        <p>游戏默认点亮的那只猫会把所在格完全盖住。这类格子先摘出颜色聚类，聚完再按四邻回填，遮挡压力测试从 2/6 提升到 5/6。</p>
-      </article>
-      <article class="card ben reveal">
-        <h3 class="h3">结果可核对，不猜答案</h3>
-        <p>每个答案都经过独立校验函数复核三条规则，并如实报告解的唯一性；多解时给出个数与第一个解，绝不静默挑一个。</p>
-      </article>
-      <article class="card ben reveal">
-        <h3 class="h3">完全本地，断网可用</h3>
-        <p>无后端、无统计脚本、无第三方依赖。截图数据不离开浏览器，保存页面后离线打开依然可以识别。</p>
-      </article>
-    </div>
-  </section>
-
-  <!-- ============ 常见问题 ============ -->
-  <section class="faq" id="faq" aria-labelledby="faqTitle">
-    <h2 class="section-title" id="faqTitle">常见问题</h2>
-    <details class="card faq-item reveal">
-      <summary>支持哪些游戏的截图？</summary>
-      <p>任何采用同一条规则的找猫类关卡都可以，例如 Meowdoku 与数独爱消消。输入只是截图，与平台和来源无关，手机截图、模拟器截图都行。</p>
-    </details>
-    <details class="card faq-item reveal">
-      <summary>图片会被上传吗？</summary>
-      <p>不会。识别与求解全部在你的浏览器内完成，页面不请求任何后端，图片数据不离开本机。</p>
-    </details>
-    <details class="card faq-item reveal">
-      <summary>识别失败怎么办？</summary>
-      <p>换一张完整、无遮挡、颜色清晰的棋盘截图。棋盘被界面元素遮挡、截图过度模糊、或某种颜色只剩一格且恰好被猫脸盖住时，信息不足无法恢复。</p>
-    </details>
-    <details class="card faq-item reveal">
-      <summary>为什么会提示有多个解？</summary>
-      <p>页面按三条规则枚举全部合法放置（上限 50 个）。绝大多数关卡只有唯一解；关卡本身多解时会报告个数并给出第一个，可对照游戏内提示确认。</p>
-    </details>
-    <details class="card faq-item reveal">
-      <summary>坐标怎么读？</summary>
-      <p>与游戏画面一致：x 是列，自左向右从 1 开始；y 是行，自下而上从 1 开始，左下角为 (1,1)。</p>
-    </details>
-    <details class="card faq-item reveal">
-      <summary>能在手机上用吗？</summary>
-      <p>可以。页面自适应手机宽度，支持从相册选图与长按粘贴，识别在手机上本地完成，一般一秒以内。</p>
-    </details>
-    <details class="card faq-item reveal">
-      <summary>有命令行版本吗？</summary>
-      <p>有。仓库的 <code>py-version/</code> 提供 Python 版本，算法与网页版完全一致，已在示例截图上逐例比对坐标一致，适合批量处理与二次开发。</p>
-    </details>
-    <details class="card faq-item reveal">
-      <summary>这是游戏的官方工具吗？</summary>
-      <p>不是。本项目是第三方开源学习工具，与游戏及其开发者、发行商无任何关联，未获授权或认可；不含也不提供游戏本体、资源文件、破解或任何绕过付费与广告的功能。</p>
-    </details>
-  </section>
-
-  <!-- ============ 尾部行动 ============ -->
-  <section class="final" aria-label="开始使用">
-    <h2 class="section-title">准备好截图了？</h2>
-    <div class="hero-actions">
-      <button id="finalPick" class="btn primary" type="button">上传截图开始识别</button>
-      <a href="#tool" class="btn ghost">回到识别区</a>
-    </div>
-  </section>
-
+    <section class="card">
+      <h2 class="h2">规则与说明</h2>
+      <ol class="rules">
+        <li>每种颜色恰好 1 只猫</li>
+        <li>每行每列恰好 1 只猫</li>
+        <li>任意两只猫不能相邻 —— 上下左右和对角线都不行（贴边 5 格、贴角 3 格也不能有）</li>
+      </ol>
+      <p class="note">
+        页面按上面三条规则枚举验证，通常得到唯一解；若关卡本身有多解，会同时给出解的个数。
+        识别失败时请换一张完整、无遮挡、颜色清晰的棋盘截图。
+        命令行版本见 <a href="https://github.com/22ABLE22/catspotter" target="_blank" rel="noopener">GitHub 仓库</a> 的 <code>py-version/</code>。
+      </p>
+      <p class="note">
+        适用于「找猫」类关卡：
+        <a href="https://play.google.com/store/apps/details?id=com.oakever.meowdoku" target="_blank" rel="noopener">Meowdoku</a>、
+        <a href="https://miniapp.bilibili.com/game/biligame8829fe8973b3e9e9" target="_blank" rel="noopener">数独爱消消</a>、
+        <code>#小程序://数独爱消消/7B5WEnLxAjgBKJj</code>
+      </p>
+      <p class="note small">
+        本页是第三方工具，与上述游戏及其开发者、发行商无任何关联，未获授权或认可。
+        程序完全在浏览器本地运行，不联网、不上传截图、不修改游戏，也不提供任何破解或绕过功能。
+        游戏名称与商标归各自权利人所有。
+      </p>
+    </section>
+  </aside>
 </main>
 
 <footer class="foot">
-  <p class="foot-note">
-    适用于「找猫」玩法截图：
-    <a href="https://play.google.com/store/apps/details?id=com.oakever.meowdoku" target="_blank" rel="noopener">Meowdoku</a>、
-    <a href="https://miniapp.bilibili.com/game/biligame8829fe8973b3e9e9" target="_blank" rel="noopener">数独爱消消</a>、
-    <code>#小程序://数独爱消消/7B5WEnLxAjgBKJj</code>
-  </p>
-  <p class="foot-note small">
-    本工具与上述游戏及其开发者、发行商无任何关联，未获授权或认可；仅供个人学习与娱乐，不提供任何破解或绕过功能。
-    游戏名称与商标归各自权利人所有。源代码以 <a href="https://github.com/22ABLE22/catspotter/blob/main/LICENSE" target="_blank" rel="noopener">MIT License</a> 发布。
-    本页无后端、无统计脚本，图片不出本机。
-  </p>
-  <p class="foot-links">
-    <a href="https://github.com/22ABLE22/catspotter" target="_blank" rel="noopener">GitHub @22ABLE22</a>
-    <a href="#main">回到顶部</a>
-  </p>
+  <a href="https://github.com/22ABLE22" target="_blank" rel="noopener">GitHub @22ABLE22</a>
 </footer>
 
 <script type="module" src="app.js"></script>
