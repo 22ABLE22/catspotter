@@ -165,12 +165,15 @@ python py-version/solver.py example/example01.jpg --mark
 ```
 ├── docs/                 # 网页版（GitHub Pages 站点根目录）
 │   ├── index.html
-│   ├── app.js            # 页面交互：读图、画圈、列坐标
+│   ├── app.js            # 页面交互：读图、画圈、列坐标；演示与滚动动效
 │   ├── cat-solver.js     # 核心算法（纯 JS，无 DOM 依赖，可直接被 Node 引用）
 │   └── style.css
 ├── py-version/           # 命令行版
 │   ├── solver.py
 │   └── solve.bat
+├── tests/                # 无头浏览器回归（本地运行，不随站点发布）
+│   ├── e2e-page.js       # 结构/动效/三张示例图识别断言
+│   └── shots.js          # 桌面与移动截图，人工视觉核对
 ├── example/              # 3 张示例截图(原尺寸 / 缩小版 / 带预亮猫遮挡)
 ├── LICENSE
 └── README.md
